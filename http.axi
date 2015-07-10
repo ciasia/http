@@ -119,9 +119,6 @@ volatile char http_socket_buff[HTTP_MAX_PARALLEL_REQUESTS][HTTP_MAX_RESPONSE_LEN
 volatile http_req_obj http_req_objs[HTTP_MAX_PARALLEL_REQUESTS]
 
 
-#include 'log'
-
-
 /**
  * Sends a HTTP GET request
  */
@@ -344,7 +341,7 @@ define_function long http_execute_request(http_url url, http_request request) {
     stack_var integer pos
 
     if (url.host == '') {
-        error('Invalid host')
+        amx_log(AMX_ERROR, 'Invalid host')
         return 0
     }
 
@@ -358,7 +355,7 @@ define_function long http_execute_request(http_url url, http_request request) {
             request.method != 'OPTIONS' &&
             request.method != 'CONNECT' &&
             request.method != 'PATCH') {
-        error("'Invalid HTTP method in request (', request.method, ')'")
+        amx_log(AMX_ERROR, "'Invalid HTTP method in request (', request.method, ')'")
         return 0
     }
 
@@ -369,13 +366,13 @@ define_function long http_execute_request(http_url url, http_request request) {
     if (request.uri[1] != '/' &&
             request.uri != '*' &&
             left_string(request.uri, 7) != 'http://') {
-        error("'Invalid request URI (', request.uri, ')'")
+        amx_log(AMX_ERROR, "'Invalid request URI (', request.uri, ')'")
         return 0
     }
 
     idx = http_get_request_resources()
     if (idx == 0) {
-        error('HTTP lib resources at capacity. Request dropped.')
+        amx_log(AMX_ERROR, 'HTTP lib resources at capacity. Request dropped.')
         return 0
     }
 
@@ -551,7 +548,7 @@ data_event[http_sockets] {
             if (http_parse_response(http_socket_buff[idx], response)) {
                 http_response_received(req_obj.seq, req_obj.host, req_obj.request, response)
             } else {
-                error('Could not parse response.')
+                amx_log(AMX_ERROR, 'Could not parse response.')
             }
         }
         #end_if
@@ -566,7 +563,7 @@ data_event[http_sockets] {
         idx = get_last(http_sockets)
         req_obj = http_req_objs[idx]
 
-        error("'HTTP socket error (', itoa(data.number), ')'")
+        amx_log(AMX_ERROR, "'HTTP socket error (', itoa(data.number), ')'")
 
         #if_defined HTTP_ERROR_CALLBACK
         if (data.number != HTTP_ERR_ALREADY_CLOSED) {
@@ -625,7 +622,7 @@ timeline_event[HTTP_TIMEOUT_TL_10] {
 
     req_obj = http_req_objs[idx]
 
-    error('HTTP response timeout')
+    amx_log(AMX_ERROR, 'HTTP response timeout')
 
     #if_defined HTTP_ERROR_CALLBACK
     http_error(req_obj.seq, req_obj.host, req_obj.request, HTTP_ERR_RESPONSE_TIME_OUT)
