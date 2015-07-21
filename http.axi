@@ -52,6 +52,7 @@ integer HTTP_ERR_ALREADY_CLOSED = 9
 integer HTTP_ERR_LOCAL_PORT_ALREADY_USED = 14
 integer HTTP_ERR_TOO_MANY_OPEN_SOCKETS = 16
 integer HTTP_ERR_LOCAL_PORT_NOT_OPEN = 17
+integer HTTP_ERR_MALFORMED_RESPONSE = 18
 char HTTP_ERR_TEXT[][32] = {
     'response time out',
     'out of memory',
@@ -69,7 +70,8 @@ char HTTP_ERR_TEXT[][32] = {
     'local port already used',
     'error 15 - unknown',
     'too many open sockets',
-    'local port not open'
+    'local port not open',
+    'malformed response'
 }
 
 
@@ -278,13 +280,21 @@ define_function long http_get_seq_id() {
 }
 
 /**
+ * Checks if the specified HTTP request resource slot is currently in use.
+ */
+define_function char http_req_obj_in_use(integer id) {
+    return http_req_objs[id].seq > 0
+}
+
+
+/**
  * Gets the next available HTTP request resource slot for use.
  */
 define_function integer http_get_request_resources() {
     stack_var integer x
 
     for (x = 1; x <= HTTP_MAX_PARALLEL_REQUESTS; x++) {
-        if (!http_req_objs[x].seq) {
+        if (http_req_obj_in_use(x) == false) {
             http_req_objs[x].seq = http_get_seq_id()
             return x
         }
@@ -503,9 +513,7 @@ data_event[http_sockets] {
         stack_var http_req_obj req_obj
 
         idx = get_last(http_sockets)
-
         http_req_objs[idx].socket_open = true
-
         req_obj = http_req_objs[idx]
 
         send_string data.device, http_build_request(req_obj.host, req_obj.request)
@@ -523,18 +531,22 @@ data_event[http_sockets] {
         stack_var http_response response
 
         idx = get_last(http_sockets)
-
         http_req_objs[idx].socket_open = false
-
         req_obj = http_req_objs[idx]
 
-        #if_defined HTTP_RESPONSE_CALLBACK
-        if (http_parse_response(http_socket_buff[idx], response)) {
-            http_response_received(req_obj.seq, req_obj.host, req_obj.request, response)
-        } else {
-            amx_log(AMX_ERROR, 'Could not parse response.')
+        if (http_req_obj_in_use(idx)) {
+            if (http_parse_response(http_socket_buff[idx], response)) {
+                #if_defined HTTP_RESPONSE_CALLBACK
+                http_response_received(req_obj.seq, req_obj.host, req_obj.request, response)
+                #end_if
+            } else {
+                amx_log(AMX_ERROR, "'HTTP parse error (', HTTP_ERR_TEXT[HTTP_ERR_MALFORMED_RESPONSE], ')'")
+
+                #if_defined HTTP_ERROR_CALLBACK
+                http_error(req_obj.seq, req_obj.host, req_obj.request, HTTP_ERR_MALFORMED_RESPONSE)
+                #end_if
+            }
         }
-        #end_if
 
         http_release_resources(idx)
     }
@@ -544,14 +556,13 @@ data_event[http_sockets] {
         stack_var http_req_obj req_obj
 
         idx = get_last(http_sockets)
+        http_req_objs[idx].socket_open = false
         req_obj = http_req_objs[idx]
 
-        amx_log(AMX_ERROR, "'HTTP socket error (', itoa(data.number), ')'")
+        amx_log(AMX_ERROR, "'HTTP socket error (', HTTP_ERR_TEXT[data.number], ')'")
 
         #if_defined HTTP_ERROR_CALLBACK
-        if (data.number != HTTP_ERR_ALREADY_CLOSED) {
-            http_error(req_obj.seq, req_obj.host, req_obj.request, data.number)
-        }
+        http_error(req_obj.seq, req_obj.host, req_obj.request, data.number)
         #end_if
 
         http_release_resources(idx)
