@@ -631,30 +631,3 @@ timeline_event[HTTP_TIMEOUT_TL_10] {
     http_release_resources(idx)
 }
 
-
-
-
-
-define_device
-
-vdvHTTPTest = 33003:1:0
-
-
-define_event
-
-data_event[vdvHTTPTest] {
-
-    command: {
-        if (data.text == 'killall') {
-            stack_var integer x
-            for (x = 1; x <= HTTP_MAX_PARALLEL_REQUESTS; x++) {
-                ip_client_close(http_sockets[x].port)
-            }
-        }
-    }
-    
-    string: {}
-    online:  {}
-    offline: {}
-}
-
