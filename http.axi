@@ -102,7 +102,6 @@ structure http_req_obj {
     char host[512]
     http_request request
     char socket_open
-    long timeout_tl
 }
 
 structure http_url {
@@ -309,8 +308,8 @@ define_function integer http_get_request_resources() {
 define_function http_release_resources(integer id) {
     stack_var http_req_obj null
 
-    if (timeline_active(http_req_objs[id].timeout_tl)) {
-        timeline_kill(http_req_objs[id].timeout_tl)
+    if (timeline_active(HTTP_TIMEOUT_TL[id])) {
+        timeline_kill(HTTP_TIMEOUT_TL[id])
     }
 
     clear_buffer http_socket_buff[id]
@@ -374,7 +373,6 @@ define_function long http_execute_request(http_url url, http_request request) {
 
     http_req_objs[idx].host = url.host
     http_req_objs[idx].request = request
-    http_req_objs[idx].timeout_tl = HTTP_TIMEOUT_TL[idx]
 
     pos = find_string(url.host, ':', 1)
     if (pos) {
@@ -518,7 +516,7 @@ data_event[http_sockets] {
 
         send_string data.device, http_build_request(req_obj.host, req_obj.request)
 
-        timeline_create(req_obj.timeout_tl,
+        timeline_create(HTTP_TIMEOUT_TL[idx],
                 HTTP_TIMEOUT_INTERVAL,
                 1,
                 TIMELINE_ABSOLUTE,
