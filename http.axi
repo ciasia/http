@@ -99,7 +99,6 @@ structure http_req_obj {
     long seq
     char host[512]
     http_request request
-    char in_use
     char ready_for_close
     char socket_open
     long timeout_tl
@@ -286,8 +285,8 @@ define_function integer http_get_request_resources() {
     stack_var integer x
 
     for (x = 1; x <= HTTP_MAX_PARALLEL_REQUESTS; x++) {
-        if (http_req_objs[x].in_use == false) {
-            http_req_objs[x].in_use = true
+        if (!http_req_objs[x].seq) {
+            http_req_objs[x].seq = http_get_seq_id()
             return x
         }
     }
@@ -378,7 +377,6 @@ define_function long http_execute_request(http_url url, http_request request) {
 
     http_req_objs[idx].host = url.host
     http_req_objs[idx].request = request
-    http_req_objs[idx].seq = http_get_seq_id()
     http_req_objs[idx].timeout_tl = HTTP_TIMEOUT_TL[idx]
 
     pos = find_string(url.host, ':', 1)
@@ -544,12 +542,10 @@ data_event[http_sockets] {
         req_obj = http_req_objs[idx]
 
         #if_defined HTTP_RESPONSE_CALLBACK
-        if (req_obj.in_use) {
-            if (http_parse_response(http_socket_buff[idx], response)) {
-                http_response_received(req_obj.seq, req_obj.host, req_obj.request, response)
-            } else {
-                amx_log(AMX_ERROR, 'Could not parse response.')
-            }
+        if (http_parse_response(http_socket_buff[idx], response)) {
+            http_response_received(req_obj.seq, req_obj.host, req_obj.request, response)
+        } else {
+            amx_log(AMX_ERROR, 'Could not parse response.')
         }
         #end_if
 
