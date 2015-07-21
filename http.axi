@@ -99,7 +99,6 @@ structure http_req_obj {
     long seq
     char host[512]
     http_request request
-    char ready_for_close
     char socket_open
     long timeout_tl
 }
@@ -311,18 +310,6 @@ define_function http_release_resources(integer id) {
     }
 
     http_req_objs[id] = null
-}
-
-/**
- * Closes all sockets that have been marked as ready for cleanup.
- */
-define_function http_cleanup_sockets() {
-    stack_var integer x
-    for (x = 1; x <= HTTP_MAX_PARALLEL_REQUESTS; x++) {
-        if (http_req_objs[x].ready_for_close) {
-            ip_client_close(http_sockets[x].port)
-        }
-    }
 }
 
 /**
@@ -570,30 +557,7 @@ data_event[http_sockets] {
         http_release_resources(idx)
     }
 
-    string: {
-        stack_var integer idx
-        stack_var http_response response
-        stack_var integer content_length
-
-        idx = get_last(http_sockets)
-        
-        if (length_string(http_socket_buff[idx]) >= HTTP_MAX_RESPONSE_LENGTH) {
-            http_req_objs[idx].ready_for_close = true
-        } else {
-            http_parse_response("http_socket_buff[idx]", response)
-            content_length = atoi(http_get_header(response.headers, 'Content-Length'))
-            if (length_string(response.body) >= content_length) {
-                http_req_objs[idx].ready_for_close = true
-            }
-        }
-
-        // Yeild until all events are processed. As we reset the http_req_obj
-        // as part of our resource cleanup in the offline event this will only
-        // close sockets that are still in need of closing.
-        wait 3 'http socket cleanup' {
-            http_cleanup_sockets()
-        }
-    }
+    string: {}
 
 }
 
