@@ -11,7 +11,7 @@ define_constant
 // Due the the way NetLinx works timeline event handlers cannot use an id array.
 // If changing this value, update event handler and definitions below for the
 // response timeout timelines to match.
-integer HTTP_MAX_PARALLEL_REQUESTS = 10
+integer HTTP_MAX_PARALLEL_REQUESTS = 15
 
 integer HTTP_BASE_PORT = 30
 integer HTTP_MAX_REQUEST_LENGTH = 4096
@@ -28,6 +28,11 @@ long HTTP_TIMEOUT_TL_7 = 36
 long HTTP_TIMEOUT_TL_8 = 37
 long HTTP_TIMEOUT_TL_9 = 38
 long HTTP_TIMEOUT_TL_10 = 39
+long HTTP_TIMEOUT_TL_11 = 40
+long HTTP_TIMEOUT_TL_12 = 41
+long HTTP_TIMEOUT_TL_13 = 42
+long HTTP_TIMEOUT_TL_14 = 43
+long HTTP_TIMEOUT_TL_15 = 44
 long HTTP_TIMEOUT_TL[] = {
     HTTP_TIMEOUT_TL_1,
     HTTP_TIMEOUT_TL_2,
@@ -38,7 +43,12 @@ long HTTP_TIMEOUT_TL[] = {
     HTTP_TIMEOUT_TL_7,
     HTTP_TIMEOUT_TL_8,
     HTTP_TIMEOUT_TL_9,
-    HTTP_TIMEOUT_TL_10
+    HTTP_TIMEOUT_TL_10,
+    HTTP_TIMEOUT_TL_11,
+    HTTP_TIMEOUT_TL_12,
+    HTTP_TIMEOUT_TL_13,
+    HTTP_TIMEOUT_TL_14,
+    HTTP_TIMEOUT_TL_15
 }
 long HTTP_TIMEOUT_INTERVAL[] = {7000}
 
@@ -579,7 +589,12 @@ timeline_event[HTTP_TIMEOUT_TL_6]
 timeline_event[HTTP_TIMEOUT_TL_7]
 timeline_event[HTTP_TIMEOUT_TL_8]
 timeline_event[HTTP_TIMEOUT_TL_9]
-timeline_event[HTTP_TIMEOUT_TL_10] {
+timeline_event[HTTP_TIMEOUT_TL_10]
+timeline_event[HTTP_TIMEOUT_TL_11]
+timeline_event[HTTP_TIMEOUT_TL_12]
+timeline_event[HTTP_TIMEOUT_TL_13]
+timeline_event[HTTP_TIMEOUT_TL_14]
+timeline_event[HTTP_TIMEOUT_TL_15] {
     stack_var integer idx
     stack_var http_req_obj req_obj
 
