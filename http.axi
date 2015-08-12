@@ -554,9 +554,9 @@ data_event[http_sockets] {
                 http_error(req_obj.seq, req_obj.host, req_obj.request, HTTP_ERR_MALFORMED_RESPONSE)
                 #end_if
             }
-        }
 
-        http_release_resources(idx)
+            http_release_resources(idx)
+        }
     }
 
     onerror: {
