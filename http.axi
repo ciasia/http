@@ -340,7 +340,7 @@ define_function http_release_resources(integer id) {
  * It is the responsibility of the implementer to then handle these accordingly.
  */
 define_function long http_execute_request(http_url url, http_request request) {
-    stack_var integer idx
+    stack_var integer id
     stack_var char server_address[256]
     stack_var integer server_port
     stack_var integer pos
@@ -375,14 +375,14 @@ define_function long http_execute_request(http_url url, http_request request) {
         return 0
     }
 
-    idx = http_get_request_resources()
-    if (idx == 0) {
+    id = http_get_request_resources()
+    if (id == 0) {
         amx_log(AMX_ERROR, 'HTTP lib resources at capacity. Request dropped.')
         return 0
     }
 
-    http_req_objs[idx].host = url.host
-    http_req_objs[idx].request = request
+    http_req_objs[id].host = url.host
+    http_req_objs[id].request = request
 
     pos = find_string(url.host, ':', 1)
     if (pos) {
@@ -393,11 +393,11 @@ define_function long http_execute_request(http_url url, http_request request) {
         server_port = 80
     }
 
-    ip_client_open(http_sockets[idx].port, server_address, server_port, IP_TCP)
+    ip_client_open(http_sockets[id].port, server_address, server_port, IP_TCP)
 
     // note: request transmitted from socket online event
 
-    return http_req_objs[idx].seq
+    return http_req_objs[id].seq
 }
 
 /**
@@ -517,16 +517,16 @@ define_event
 data_event[http_sockets] {
 
     online: {
-        stack_var integer idx
+        stack_var integer id
         stack_var http_req_obj req_obj
 
-        idx = get_last(http_sockets)
-        http_req_objs[idx].socket_open = true
-        req_obj = http_req_objs[idx]
+        id = get_last(http_sockets)
+        http_req_objs[id].socket_open = true
+        req_obj = http_req_objs[id]
 
         send_string data.device, http_build_request(req_obj.host, req_obj.request)
 
-        timeline_create(HTTP_TIMEOUT_TL[idx],
+        timeline_create(HTTP_TIMEOUT_TL[id],
                 HTTP_TIMEOUT_INTERVAL,
                 1,
                 TIMELINE_ABSOLUTE,
@@ -534,16 +534,16 @@ data_event[http_sockets] {
     }
 
     offline: {
-        stack_var integer idx
+        stack_var integer id
         stack_var http_req_obj req_obj
         stack_var http_response response
 
-        idx = get_last(http_sockets)
-        http_req_objs[idx].socket_open = false
-        req_obj = http_req_objs[idx]
+        id = get_last(http_sockets)
+        http_req_objs[id].socket_open = false
+        req_obj = http_req_objs[id]
 
-        if (http_req_obj_in_use(idx)) {
-            if (http_parse_response(http_socket_buff[idx], response)) {
+        if (http_req_obj_in_use(id)) {
+            if (http_parse_response(http_socket_buff[id], response)) {
                 #if_defined HTTP_RESPONSE_CALLBACK
                 http_response_received(req_obj.seq, req_obj.host, req_obj.request, response)
                 #end_if
@@ -555,17 +555,17 @@ data_event[http_sockets] {
                 #end_if
             }
 
-            http_release_resources(idx)
+            http_release_resources(id)
         }
     }
 
     onerror: {
-        stack_var integer idx
+        stack_var integer id
         stack_var http_req_obj req_obj
 
-        idx = get_last(http_sockets)
-        http_req_objs[idx].socket_open = false
-        req_obj = http_req_objs[idx]
+        id = get_last(http_sockets)
+        http_req_objs[id].socket_open = false
+        req_obj = http_req_objs[id]
 
         amx_log(AMX_ERROR, "'HTTP socket error (', HTTP_ERR_TEXT[data.number], ')'")
 
@@ -573,7 +573,7 @@ data_event[http_sockets] {
         http_error(req_obj.seq, req_obj.host, req_obj.request, data.number)
         #end_if
 
-        http_release_resources(idx)
+        http_release_resources(id)
     }
 
     string: {}
@@ -595,16 +595,16 @@ timeline_event[HTTP_TIMEOUT_TL_12]
 timeline_event[HTTP_TIMEOUT_TL_13]
 timeline_event[HTTP_TIMEOUT_TL_14]
 timeline_event[HTTP_TIMEOUT_TL_15] {
-    stack_var integer idx
+    stack_var integer id
     stack_var http_req_obj req_obj
 
-    for (idx = 1; idx <= length_array(HTTP_TIMEOUT_TL); idx++) {
-        if (timeline.id == HTTP_TIMEOUT_TL[idx]) {
+    for (id = 1; id <= length_array(HTTP_TIMEOUT_TL); id++) {
+        if (timeline.id == HTTP_TIMEOUT_TL[id]) {
             break
         }
     }
 
-    req_obj = http_req_objs[idx]
+    req_obj = http_req_objs[id]
 
     amx_log(AMX_ERROR, 'HTTP response timeout')
 
@@ -612,6 +612,6 @@ timeline_event[HTTP_TIMEOUT_TL_15] {
     http_error(req_obj.seq, req_obj.host, req_obj.request, HTTP_ERR_RESPONSE_TIME_OUT)
     #end_if
 
-    http_release_resources(idx)
+    http_release_resources(id)
 }
 
