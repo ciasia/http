@@ -395,6 +395,12 @@ define_function long http_execute_request(http_url url, http_request request) {
 
     ip_client_open(http_sockets[id].port, server_address, server_port, IP_TCP)
 
+    timeline_create(HTTP_TIMEOUT_TL[id],
+                HTTP_TIMEOUT_INTERVAL,
+                1,
+                TIMELINE_ABSOLUTE,
+                TIMELINE_ONCE)
+
     // note: request transmitted from socket online event
 
     return http_req_objs[id].seq
@@ -525,12 +531,6 @@ data_event[http_sockets] {
         req_obj = http_req_objs[id]
 
         send_string data.device, http_build_request(req_obj.host, req_obj.request)
-
-        timeline_create(HTTP_TIMEOUT_TL[id],
-                HTTP_TIMEOUT_INTERVAL,
-                1,
-                TIMELINE_ABSOLUTE,
-                TIMELINE_ONCE)
     }
 
     offline: {
