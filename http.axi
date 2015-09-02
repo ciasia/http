@@ -343,10 +343,6 @@ define_function http_release_resources(integer id) {
 
     clear_buffer http_socket_buff[id]
 
-    if (http_req_objs[id].socket_open) {
-        ip_client_close(http_sockets[id].port)
-    }
-
     http_req_objs[id] = null
 }
 
@@ -621,6 +617,11 @@ timeline_event[HTTP_TIMEOUT_TL_15] {
     http_error(req_obj.seq, req_obj.host, req_obj.request, HTTP_ERR_RESPONSE_TIME_OUT)
     #end_if
 
-    http_release_resources(id)
+    if (req_obj.socket_state == HTTP_SOCKET_OPEN || req_obj.socket_state == HTTP_SOCKET_OPENING) {
+        ip_client_close(http_sockets[id].port)
+        http_req_objs[id].socket_state = HTTP_SOCKET_CLOSING
+    } else {
+        http_release_resources(id)
+    }
 }
 
