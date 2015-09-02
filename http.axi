@@ -84,6 +84,11 @@ char HTTP_ERR_TEXT[][32] = {
     'malformed response'
 }
 
+integer HTTP_SOCKET_CLOSED = 0
+integer HTTP_SOCKET_OPENING = 1
+integer HTTP_SOCKET_OPEN = 3
+integer HTTP_SOCKET_CLOSING = 4
+
 
 define_type
 
@@ -111,7 +116,7 @@ structure http_req_obj {
     long seq
     char host[512]
     http_request request
-    char socket_open
+    char socket_state
 }
 
 structure http_url {
@@ -338,10 +343,6 @@ define_function http_release_resources(integer id) {
 
     clear_buffer http_socket_buff[id]
 
-    if (http_req_objs[id].socket_open) {
-        ip_client_close(http_sockets[id].port)
-    }
-
     http_req_objs[id] = null
 }
 
@@ -394,6 +395,12 @@ define_function long http_execute_request(http_url url, http_request request) {
     }
 
     ip_client_open(http_sockets[id].port, server_address, server_port, IP_TCP)
+
+    timeline_create(HTTP_TIMEOUT_TL[id],
+                HTTP_TIMEOUT_INTERVAL,
+                1,
+                TIMELINE_ABSOLUTE,
+                TIMELINE_ONCE)
 
     // note: request transmitted from socket online event
 
@@ -521,16 +528,10 @@ data_event[http_sockets] {
         stack_var http_req_obj req_obj
 
         id = get_last(http_sockets)
-        http_req_objs[id].socket_open = true
+        http_req_objs[id].socket_state = HTTP_SOCKET_OPEN
         req_obj = http_req_objs[id]
 
         send_string data.device, http_build_request(req_obj.host, req_obj.request)
-
-        timeline_create(HTTP_TIMEOUT_TL[id],
-                HTTP_TIMEOUT_INTERVAL,
-                1,
-                TIMELINE_ABSOLUTE,
-                TIMELINE_ONCE)
     }
 
     offline: {
@@ -539,10 +540,11 @@ data_event[http_sockets] {
         stack_var http_response response
 
         id = get_last(http_sockets)
-        http_req_objs[id].socket_open = false
         req_obj = http_req_objs[id]
 
-        if (http_req_obj_in_use(id)) {
+        // Server should be the only one to bring down the connection. If we're
+        // closing this is due to our response timeout timeline firing
+        if (req_obj.socket_state != HTTP_SOCKET_CLOSING) {
             if (http_parse_response(http_socket_buff[id], response)) {
                 #if_defined HTTP_RESPONSE_CALLBACK
                 http_response_received(req_obj.seq, req_obj.host, req_obj.request, response)
@@ -554,9 +556,11 @@ data_event[http_sockets] {
                 http_error(req_obj.seq, req_obj.host, req_obj.request, HTTP_ERR_MALFORMED_RESPONSE)
                 #end_if
             }
-
-            http_release_resources(id)
         }
+
+        http_req_objs[id].socket_state = HTTP_SOCKET_CLOSED
+
+        http_release_resources(id)
     }
 
     onerror: {
@@ -564,7 +568,6 @@ data_event[http_sockets] {
         stack_var http_req_obj req_obj
 
         id = get_last(http_sockets)
-        http_req_objs[id].socket_open = false
         req_obj = http_req_objs[id]
 
         amx_log(AMX_ERROR, "'HTTP socket error (', HTTP_ERR_TEXT[data.number], ')'")
@@ -572,6 +575,8 @@ data_event[http_sockets] {
         #if_defined HTTP_ERROR_CALLBACK
         http_error(req_obj.seq, req_obj.host, req_obj.request, data.number)
         #end_if
+
+        http_req_objs[id].socket_state = HTTP_SOCKET_CLOSED
 
         http_release_resources(id)
     }
@@ -612,6 +617,11 @@ timeline_event[HTTP_TIMEOUT_TL_15] {
     http_error(req_obj.seq, req_obj.host, req_obj.request, HTTP_ERR_RESPONSE_TIME_OUT)
     #end_if
 
-    http_release_resources(id)
+    if (req_obj.socket_state == HTTP_SOCKET_OPEN || req_obj.socket_state == HTTP_SOCKET_OPENING) {
+        ip_client_close(http_sockets[id].port)
+        http_req_objs[id].socket_state = HTTP_SOCKET_CLOSING
+    } else {
+        http_release_resources(id)
+    }
 }
 
