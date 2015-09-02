@@ -242,6 +242,20 @@ define_function char[HTTP_MAX_REQUEST_LENGTH] http_build_request(char host[],
     stack_var http_header header
     stack_var integer x
 
+    request.method = upper_string(request.method)
+    if (request.method != 'GET' &&
+            request.method != 'HEAD' &&
+            request.method != 'POST' &&
+            request.method != 'PUT' && 
+            request.method != 'DELETE' &&
+            request.method != 'TRACE' &&
+            request.method != 'OPTIONS' &&
+            request.method != 'CONNECT' &&
+            request.method != 'PATCH') {
+        amx_log(AMX_ERROR, "'Invalid HTTP method in request (', request.method, ')'")
+        return ''
+    }
+
     ret = "request.method, ' ', request.uri, ' HTTP/1.1', $0d, $0a"
     
     ret = "ret, 'Host: ', host, $0d, $0a"
@@ -347,20 +361,6 @@ define_function long http_execute_request(http_url url, http_request request) {
 
     if (url.host == '') {
         amx_log(AMX_ERROR, 'Invalid host')
-        return 0
-    }
-
-    request.method = upper_string(request.method)
-    if (request.method != 'GET' &&
-            request.method != 'HEAD' &&
-            request.method != 'POST' &&
-            request.method != 'PUT' && 
-            request.method != 'DELETE' &&
-            request.method != 'TRACE' &&
-            request.method != 'OPTIONS' &&
-            request.method != 'CONNECT' &&
-            request.method != 'PATCH') {
-        amx_log(AMX_ERROR, "'Invalid HTTP method in request (', request.method, ')'")
         return 0
     }
 
