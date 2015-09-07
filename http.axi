@@ -84,6 +84,11 @@ char HTTP_ERR_TEXT[][32] = {
     'malformed response'
 }
 
+integer HTTP_SOCKET_CLOSED = 0
+integer HTTP_SOCKET_OPENING = 1
+integer HTTP_SOCKET_OPEN = 3
+integer HTTP_SOCKET_CLOSING = 4
+
 
 define_type
 
@@ -111,7 +116,7 @@ structure http_req_obj {
     long seq
     char host[512]
     http_request request
-    char socket_open
+    char socket_state
 }
 
 structure http_url {
@@ -242,6 +247,20 @@ define_function char[HTTP_MAX_REQUEST_LENGTH] http_build_request(char host[],
     stack_var http_header header
     stack_var integer x
 
+    request.method = upper_string(request.method)
+    if (request.method != 'GET' &&
+            request.method != 'HEAD' &&
+            request.method != 'POST' &&
+            request.method != 'PUT' && 
+            request.method != 'DELETE' &&
+            request.method != 'TRACE' &&
+            request.method != 'OPTIONS' &&
+            request.method != 'CONNECT' &&
+            request.method != 'PATCH') {
+        amx_log(AMX_ERROR, "'Invalid HTTP method in request (', request.method, ')'")
+        return ''
+    }
+
     ret = "request.method, ' ', request.uri, ' HTTP/1.1', $0d, $0a"
     
     ret = "ret, 'Host: ', host, $0d, $0a"
@@ -324,10 +343,6 @@ define_function http_release_resources(integer id) {
 
     clear_buffer http_socket_buff[id]
 
-    if (http_req_objs[id].socket_open) {
-        ip_client_close(http_sockets[id].port)
-    }
-
     http_req_objs[id] = null
 }
 
@@ -340,27 +355,13 @@ define_function http_release_resources(integer id) {
  * It is the responsibility of the implementer to then handle these accordingly.
  */
 define_function long http_execute_request(http_url url, http_request request) {
-    stack_var integer idx
+    stack_var integer id
     stack_var char server_address[256]
     stack_var integer server_port
     stack_var integer pos
 
     if (url.host == '') {
         amx_log(AMX_ERROR, 'Invalid host')
-        return 0
-    }
-
-    request.method = upper_string(request.method)
-    if (request.method != 'GET' &&
-            request.method != 'HEAD' &&
-            request.method != 'POST' &&
-            request.method != 'PUT' && 
-            request.method != 'DELETE' &&
-            request.method != 'TRACE' &&
-            request.method != 'OPTIONS' &&
-            request.method != 'CONNECT' &&
-            request.method != 'PATCH') {
-        amx_log(AMX_ERROR, "'Invalid HTTP method in request (', request.method, ')'")
         return 0
     }
 
@@ -375,14 +376,14 @@ define_function long http_execute_request(http_url url, http_request request) {
         return 0
     }
 
-    idx = http_get_request_resources()
-    if (idx == 0) {
+    id = http_get_request_resources()
+    if (id == 0) {
         amx_log(AMX_ERROR, 'HTTP lib resources at capacity. Request dropped.')
         return 0
     }
 
-    http_req_objs[idx].host = url.host
-    http_req_objs[idx].request = request
+    http_req_objs[id].host = url.host
+    http_req_objs[id].request = request
 
     pos = find_string(url.host, ':', 1)
     if (pos) {
@@ -393,11 +394,17 @@ define_function long http_execute_request(http_url url, http_request request) {
         server_port = 80
     }
 
-    ip_client_open(http_sockets[idx].port, server_address, server_port, IP_TCP)
+    ip_client_open(http_sockets[id].port, server_address, server_port, IP_TCP)
+
+    timeline_create(HTTP_TIMEOUT_TL[id],
+                HTTP_TIMEOUT_INTERVAL,
+                1,
+                TIMELINE_ABSOLUTE,
+                TIMELINE_ONCE)
 
     // note: request transmitted from socket online event
 
-    return http_req_objs[idx].seq
+    return http_req_objs[id].seq
 }
 
 /**
@@ -517,33 +524,28 @@ define_event
 data_event[http_sockets] {
 
     online: {
-        stack_var integer idx
+        stack_var integer id
         stack_var http_req_obj req_obj
 
-        idx = get_last(http_sockets)
-        http_req_objs[idx].socket_open = true
-        req_obj = http_req_objs[idx]
+        id = get_last(http_sockets)
+        http_req_objs[id].socket_state = HTTP_SOCKET_OPEN
+        req_obj = http_req_objs[id]
 
         send_string data.device, http_build_request(req_obj.host, req_obj.request)
-
-        timeline_create(HTTP_TIMEOUT_TL[idx],
-                HTTP_TIMEOUT_INTERVAL,
-                1,
-                TIMELINE_ABSOLUTE,
-                TIMELINE_ONCE)
     }
 
     offline: {
-        stack_var integer idx
+        stack_var integer id
         stack_var http_req_obj req_obj
         stack_var http_response response
 
-        idx = get_last(http_sockets)
-        http_req_objs[idx].socket_open = false
-        req_obj = http_req_objs[idx]
+        id = get_last(http_sockets)
+        req_obj = http_req_objs[id]
 
-        if (http_req_obj_in_use(idx)) {
-            if (http_parse_response(http_socket_buff[idx], response)) {
+        // Server should be the only one to bring down the connection. If we're
+        // closing this is due to our response timeout timeline firing
+        if (req_obj.socket_state != HTTP_SOCKET_CLOSING) {
+            if (http_parse_response(http_socket_buff[id], response)) {
                 #if_defined HTTP_RESPONSE_CALLBACK
                 http_response_received(req_obj.seq, req_obj.host, req_obj.request, response)
                 #end_if
@@ -554,18 +556,19 @@ data_event[http_sockets] {
                 http_error(req_obj.seq, req_obj.host, req_obj.request, HTTP_ERR_MALFORMED_RESPONSE)
                 #end_if
             }
-
-            http_release_resources(idx)
         }
+
+        http_req_objs[id].socket_state = HTTP_SOCKET_CLOSED
+
+        http_release_resources(id)
     }
 
     onerror: {
-        stack_var integer idx
+        stack_var integer id
         stack_var http_req_obj req_obj
 
-        idx = get_last(http_sockets)
-        http_req_objs[idx].socket_open = false
-        req_obj = http_req_objs[idx]
+        id = get_last(http_sockets)
+        req_obj = http_req_objs[id]
 
         amx_log(AMX_ERROR, "'HTTP socket error (', HTTP_ERR_TEXT[data.number], ')'")
 
@@ -573,7 +576,9 @@ data_event[http_sockets] {
         http_error(req_obj.seq, req_obj.host, req_obj.request, data.number)
         #end_if
 
-        http_release_resources(idx)
+        http_req_objs[id].socket_state = HTTP_SOCKET_CLOSED
+
+        http_release_resources(id)
     }
 
     string: {}
@@ -595,16 +600,16 @@ timeline_event[HTTP_TIMEOUT_TL_12]
 timeline_event[HTTP_TIMEOUT_TL_13]
 timeline_event[HTTP_TIMEOUT_TL_14]
 timeline_event[HTTP_TIMEOUT_TL_15] {
-    stack_var integer idx
+    stack_var integer id
     stack_var http_req_obj req_obj
 
-    for (idx = 1; idx <= length_array(HTTP_TIMEOUT_TL); idx++) {
-        if (timeline.id == HTTP_TIMEOUT_TL[idx]) {
+    for (id = 1; id <= length_array(HTTP_TIMEOUT_TL); id++) {
+        if (timeline.id == HTTP_TIMEOUT_TL[id]) {
             break
         }
     }
 
-    req_obj = http_req_objs[idx]
+    req_obj = http_req_objs[id]
 
     amx_log(AMX_ERROR, 'HTTP response timeout')
 
@@ -612,6 +617,11 @@ timeline_event[HTTP_TIMEOUT_TL_15] {
     http_error(req_obj.seq, req_obj.host, req_obj.request, HTTP_ERR_RESPONSE_TIME_OUT)
     #end_if
 
-    http_release_resources(idx)
+    if (req_obj.socket_state == HTTP_SOCKET_OPEN || req_obj.socket_state == HTTP_SOCKET_OPENING) {
+        ip_client_close(http_sockets[id].port)
+        http_req_objs[id].socket_state = HTTP_SOCKET_CLOSING
+    } else {
+        http_release_resources(id)
+    }
 }
 
