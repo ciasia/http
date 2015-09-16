@@ -384,6 +384,7 @@ define_function long http_execute_request(http_url url, http_request request) {
 
     http_req_objs[id].host = url.host
     http_req_objs[id].request = request
+    http_req_objs[id].socket_state = HTTP_SOCKET_OPENING
 
     pos = find_string(url.host, ':', 1)
     if (pos) {
