@@ -618,7 +618,7 @@ timeline_event[HTTP_TIMEOUT_TL_15] {
     http_error(req_obj.seq, req_obj.host, req_obj.request, HTTP_ERR_RESPONSE_TIME_OUT)
     #end_if
 
-    if (req_obj.socket_state == HTTP_SOCKET_OPEN || req_obj.socket_state == HTTP_SOCKET_OPENING) {
+    if (req_obj.socket_state == HTTP_SOCKET_OPEN) {
         ip_client_close(http_sockets[id].port)
         http_req_objs[id].socket_state = HTTP_SOCKET_CLOSING
     } else {
