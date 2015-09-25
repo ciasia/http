@@ -316,15 +316,23 @@ define_function char http_req_obj_in_use(integer resouce_id) {
 
 
 /**
- * Gets the next available HTTP request resource slot for use.
+ * Allocates a request to one of our HTTP request resource slots for execution.
+ *
+ * note: req_obj argument will be written to
  */
-define_function integer http_get_request_resources() {
-    stack_var integer x
+define_function integer http_build_req_obj(http_req_obj req_obj, char host[],
+        http_request request) {
+    stack_var integer resource_id
 
-    for (x = 1; x <= HTTP_MAX_PARALLEL_REQUESTS; x++) {
-        if (http_req_obj_in_use(x) == false) {
-            http_req_objs[x].seq = http_get_seq_id()
-            return x
+    for (resource_id = 1; resource_id <= HTTP_MAX_PARALLEL_REQUESTS; resource_id++) {
+        if (http_req_obj_in_use(resource_id) == false) {
+            req_obj.seq = http_next_seq()
+            req_obj.host = host
+            req_obj.request = request
+
+            http_req_objs[resource_id] = req_obj
+
+            return resource_id
         }
     }
 
