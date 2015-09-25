@@ -84,8 +84,9 @@ char HTTP_ERR_TEXT[][32] = {
     'malformed response'
 }
 
-integer HTTP_SOCKET_CLOSED = 0
-integer HTTP_SOCKET_OPENING = 1
+integer HTTP_SOCKET_STATE_UNKNOWN = 0
+integer HTTP_SOCKET_CLOSED = 1
+integer HTTP_SOCKET_OPENING = 2
 integer HTTP_SOCKET_OPEN = 3
 integer HTTP_SOCKET_CLOSING = 4
 
@@ -116,7 +117,6 @@ structure http_req_obj {
     long seq
     char host[512]
     http_request request
-    char socket_state
 }
 
 structure http_url {
@@ -129,6 +129,7 @@ structure http_url {
 define_variable
 
 volatile dev http_sockets[HTTP_MAX_PARALLEL_REQUESTS]
+volatile integer http_socket_state[HTTP_MAX_PARALLEL_REQUESTS]
 volatile char http_socket_buff[HTTP_MAX_PARALLEL_REQUESTS][HTTP_MAX_RESPONSE_LENGTH]
 volatile http_req_obj http_req_objs[HTTP_MAX_PARALLEL_REQUESTS]
 
@@ -534,9 +535,10 @@ data_event[http_sockets] {
         stack_var integer resource_id
         stack_var http_req_obj req_obj
 
-        http_req_objs[id].socket_state = HTTP_SOCKET_OPEN
         resource_id = get_last(http_sockets)
         req_obj = http_req_objs[resource_id]
+
+        http_socket_state[resource_id] = HTTP_SOCKET_OPEN
 
         send_string data.device, http_build_request(req_obj.host, req_obj.request)
     }
@@ -545,14 +547,32 @@ data_event[http_sockets] {
         stack_var integer resource_id
         stack_var http_req_obj req_obj
         stack_var http_response response
+        stack_var char valid_response
+        stack_var integer precurser_state
+
         resource_id = get_last(http_sockets)
         req_obj = http_req_objs[resource_id]
 
+        precurser_state = http_socket_state[resource_id]
+        http_socket_state[resource_id] = HTTP_SOCKET_CLOSED
 
         // Server should be the only one to bring down the connection. If we're
-        // closing this is due to our response timeout timeline firing
-        if (req_obj.socket_state != HTTP_SOCKET_CLOSING) {
-            if (http_parse_response(http_socket_buff[id], response)) {
+        // closing this it is due to our response timeout timeline firing
+        if (precurser_state == HTTP_SOCKET_CLOSING) {
+            amx_log(AMX_ERROR, 'HTTP response timeout')
+
+            http_release_resources(resource_id)
+
+            #if_defined HTTP_ERROR_CALLBACK
+            http_error(req_obj.seq, req_obj.host, req_obj.request, HTTP_ERR_RESPONSE_TIME_OUT)
+            #end_if
+
+        } else {
+            valid_response = http_parse_response(http_socket_buff[resource_id], response)
+
+            http_release_resources(resource_id)
+
+            if (valid_response) {
                 #if_defined HTTP_RESPONSE_CALLBACK
                 http_response_received(req_obj.seq, req_obj.host, req_obj.request, response)
                 #end_if
@@ -564,10 +584,6 @@ data_event[http_sockets] {
                 #end_if
             }
         }
-
-        http_req_objs[id].socket_state = HTTP_SOCKET_CLOSED
-
-        http_release_resources(id)
     }
 
     onerror: {
@@ -615,17 +631,11 @@ timeline_event[HTTP_TIMEOUT_TL_15] {
         }
     }
 
-    amx_log(AMX_ERROR, 'HTTP response timeout')
 
-    #if_defined HTTP_ERROR_CALLBACK
-    http_error(req_obj.seq, req_obj.host, req_obj.request, HTTP_ERR_RESPONSE_TIME_OUT)
-    #end_if
+    if (http_socket_state[resource_id] == HTTP_SOCKET_OPEN) {
 
-    if (req_obj.socket_state == HTTP_SOCKET_OPEN) {
-        ip_client_close(http_sockets[id].port)
-        http_req_objs[id].socket_state = HTTP_SOCKET_CLOSING
-    } else {
-        http_release_resources(id)
+        http_socket_state[resource_id] = HTTP_SOCKET_CLOSING
+        ip_client_close(http_sockets[resource_id].port)
     }
 }
 
