@@ -593,15 +593,17 @@ data_event[http_sockets] {
         resource_id = get_last(http_sockets)
         req_obj = http_req_objs[resource_id]
 
+        if (data.number != HTTP_ERR_LOCAL_PORT_ALREADY_USED) {
+            http_socket_state[resource_id] = HTTP_SOCKET_CLOSED
+        }
+
         amx_log(AMX_ERROR, "'HTTP socket error (', HTTP_ERR_TEXT[data.number], ')'")
+
+        http_release_resources(resource_id)
 
         #if_defined HTTP_ERROR_CALLBACK
         http_error(req_obj.seq, req_obj.host, req_obj.request, data.number)
         #end_if
-
-        http_req_objs[id].socket_state = HTTP_SOCKET_CLOSED
-
-        http_release_resources(id)
     }
 
     string: {}
