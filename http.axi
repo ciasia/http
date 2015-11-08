@@ -544,7 +544,11 @@ data_event[http_sockets] {
 
         http_socket_state[resource_id] = HTTP_SOCKET_STATE_OPEN
 
-        send_string data.device, http_build_request(req_obj.host, req_obj.request)
+        if (http_resource_in_use(resource_id)) {
+            send_string data.device, http_build_request(req_obj.host, req_obj.request)
+        } else {
+            http_release_resources(resource_id)
+        }
     }
 
     offline: {
@@ -590,7 +594,6 @@ data_event[http_sockets] {
         }
 
         if (http_resource_in_use(resource_id)) {
-
             amx_log(AMX_ERROR, "'HTTP socket error (', HTTP_ERR_TEXT[data.number], ')'")
 
             http_release_resources(resource_id)
@@ -630,13 +633,14 @@ timeline_event[HTTP_TIMEOUT_TL_15] {
     }
     req_obj = http_req_objs[resource_id]
 
-    amx_log(AMX_ERROR, 'HTTP response timeout')
+    if (http_resource_in_use(resource_id)) {
+        amx_log(AMX_ERROR, 'HTTP response timeout')
 
+        http_release_resources(resource_id)
 
-    http_release_resources(resource_id)
-
-    #if_defined HTTP_ERROR_CALLBACK
-    http_error(req_obj.seq, req_obj.host, req_obj.request, HTTP_ERR_RESPONSE_TIME_OUT)
-    #end_if
+        #if_defined HTTP_ERROR_CALLBACK
+        http_error(req_obj.seq, req_obj.host, req_obj.request, HTTP_ERR_RESPONSE_TIME_OUT)
+        #end_if
+    }
 }
 
