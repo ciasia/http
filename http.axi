@@ -50,7 +50,7 @@ long HTTP_TIMEOUT_TL[] = {
     HTTP_TIMEOUT_TL_14,
     HTTP_TIMEOUT_TL_15
 }
-long HTTP_TIMEOUT_INTERVAL[] = {7000}
+long HTTP_TIMEOUT_INTERVAL[] = {10000}
 
 integer HTTP_ERR_RESPONSE_TIME_OUT = 1
 integer HTTP_ERR_NO_MEM = 2
@@ -84,10 +84,10 @@ char HTTP_ERR_TEXT[][32] = {
     'malformed response'
 }
 
-integer HTTP_SOCKET_CLOSED = 0
-integer HTTP_SOCKET_OPENING = 1
-integer HTTP_SOCKET_OPEN = 3
-integer HTTP_SOCKET_CLOSING = 4
+integer HTTP_SOCKET_STATE_CLOSED = 0
+integer HTTP_SOCKET_STATE_OPENING = 1
+integer HTTP_SOCKET_STATE_OPEN = 2
+integer HTTP_SOCKET_STATE_CLOSING = 3
 
 
 define_type
@@ -116,7 +116,6 @@ structure http_req_obj {
     long seq
     char host[512]
     http_request request
-    char socket_state
 }
 
 structure http_url {
@@ -129,6 +128,7 @@ structure http_url {
 define_variable
 
 volatile dev http_sockets[HTTP_MAX_PARALLEL_REQUESTS]
+volatile integer http_socket_state[HTTP_MAX_PARALLEL_REQUESTS]
 volatile char http_socket_buff[HTTP_MAX_PARALLEL_REQUESTS][HTTP_MAX_RESPONSE_LENGTH]
 volatile http_req_obj http_req_objs[HTTP_MAX_PARALLEL_REQUESTS]
 
@@ -293,7 +293,7 @@ define_function char[HTTP_MAX_REQUEST_LENGTH] http_build_request(char host[],
 /**
  * Creates a sequence id to assist in identifying http responses.
  */
-define_function long http_get_seq_id() {
+define_function long http_next_seq() {
     local_var long next_seq
     stack_var long seq
 
@@ -310,21 +310,29 @@ define_function long http_get_seq_id() {
 /**
  * Checks if the specified HTTP request resource slot is currently in use.
  */
-define_function char http_req_obj_in_use(integer id) {
-    return http_req_objs[id].seq > 0
+define_function char http_resource_in_use(integer resource_id) {
+    return http_req_objs[resource_id].seq > 0 ||
+            http_socket_state[resource_id] != HTTP_SOCKET_STATE_CLOSED
 }
 
-
 /**
- * Gets the next available HTTP request resource slot for use.
+ * Allocates a request to one of our HTTP request resource slots for execution.
+ *
+ * note: req_obj argument will be written to
  */
-define_function integer http_get_request_resources() {
-    stack_var integer x
+define_function integer http_build_req_obj(http_req_obj req_obj, char host[],
+        http_request request) {
+    stack_var integer resource_id
 
-    for (x = 1; x <= HTTP_MAX_PARALLEL_REQUESTS; x++) {
-        if (http_req_obj_in_use(x) == false) {
-            http_req_objs[x].seq = http_get_seq_id()
-            return x
+    for (resource_id = 1; resource_id <= HTTP_MAX_PARALLEL_REQUESTS; resource_id++) {
+        if (http_resource_in_use(resource_id) == false) {
+            req_obj.seq = http_next_seq()
+            req_obj.host = host
+            req_obj.request = request
+
+            http_req_objs[resource_id] = req_obj
+
+            return resource_id
         }
     }
 
@@ -332,18 +340,23 @@ define_function integer http_get_request_resources() {
 }
 
 /**
- * Returns a HTTP comms slot to the pool.
+ * Returns a resource slot back to our pool.
  */
-define_function http_release_resources(integer id) {
+define_function http_release_resources(integer resource_id) {
     stack_var http_req_obj null
 
-    if (timeline_active(HTTP_TIMEOUT_TL[id])) {
-        timeline_kill(HTTP_TIMEOUT_TL[id])
+    if (timeline_active(HTTP_TIMEOUT_TL[resource_id])) {
+        timeline_kill(HTTP_TIMEOUT_TL[resource_id])
     }
 
-    clear_buffer http_socket_buff[id]
+    if (http_socket_state[resource_id] == HTTP_SOCKET_STATE_OPEN) {
+        ip_client_close(http_sockets[resource_id].port)
+        http_socket_state[resource_id] = HTTP_SOCKET_STATE_CLOSING
+    }
 
-    http_req_objs[id] = null
+    clear_buffer http_socket_buff[resource_id]
+
+    http_req_objs[resource_id] = null
 }
 
 /**
@@ -355,7 +368,8 @@ define_function http_release_resources(integer id) {
  * It is the responsibility of the implementer to then handle these accordingly.
  */
 define_function long http_execute_request(http_url url, http_request request) {
-    stack_var integer id
+    stack_var integer resource_id
+    stack_var http_req_obj req_obj
     stack_var char server_address[256]
     stack_var integer server_port
     stack_var integer pos
@@ -376,14 +390,11 @@ define_function long http_execute_request(http_url url, http_request request) {
         return 0
     }
 
-    id = http_get_request_resources()
-    if (id == 0) {
+    resource_id = http_build_req_obj(req_obj, url.host, request)
+    if (resource_id == 0) {
         amx_log(AMX_ERROR, 'HTTP lib resources at capacity. Request dropped.')
         return 0
     }
-
-    http_req_objs[id].host = url.host
-    http_req_objs[id].request = request
 
     pos = find_string(url.host, ':', 1)
     if (pos) {
@@ -394,9 +405,10 @@ define_function long http_execute_request(http_url url, http_request request) {
         server_port = 80
     }
 
-    ip_client_open(http_sockets[id].port, server_address, server_port, IP_TCP)
+    ip_client_open(http_sockets[resource_id].port, server_address, server_port, IP_TCP)
+    http_socket_state[resource_id] = HTTP_SOCKET_STATE_OPENING
 
-    timeline_create(HTTP_TIMEOUT_TL[id],
+    timeline_create(HTTP_TIMEOUT_TL[resource_id],
                 HTTP_TIMEOUT_INTERVAL,
                 1,
                 TIMELINE_ABSOLUTE,
@@ -404,7 +416,7 @@ define_function long http_execute_request(http_url url, http_request request) {
 
     // note: request transmitted from socket online event
 
-    return http_req_objs[id].seq
+    return req_obj.seq
 }
 
 /**
@@ -524,28 +536,39 @@ define_event
 data_event[http_sockets] {
 
     online: {
-        stack_var integer id
+        stack_var integer resource_id
         stack_var http_req_obj req_obj
 
-        id = get_last(http_sockets)
-        http_req_objs[id].socket_state = HTTP_SOCKET_OPEN
-        req_obj = http_req_objs[id]
+        resource_id = get_last(http_sockets)
+        req_obj = http_req_objs[resource_id]
 
-        send_string data.device, http_build_request(req_obj.host, req_obj.request)
+        http_socket_state[resource_id] = HTTP_SOCKET_STATE_OPEN
+
+        if (http_resource_in_use(resource_id)) {
+            send_string data.device, http_build_request(req_obj.host, req_obj.request)
+        } else {
+            http_release_resources(resource_id)
+        }
     }
 
     offline: {
-        stack_var integer id
+        stack_var integer resource_id
         stack_var http_req_obj req_obj
         stack_var http_response response
+        stack_var char valid_response
 
-        id = get_last(http_sockets)
-        req_obj = http_req_objs[id]
+        resource_id = get_last(http_sockets)
+        req_obj = http_req_objs[resource_id]
 
-        // Server should be the only one to bring down the connection. If we're
-        // closing this is due to our response timeout timeline firing
-        if (req_obj.socket_state != HTTP_SOCKET_CLOSING) {
-            if (http_parse_response(http_socket_buff[id], response)) {
+        http_socket_state[resource_id] = HTTP_SOCKET_STATE_CLOSED
+
+        if (http_resource_in_use(resource_id)) {
+
+            valid_response = http_parse_response(http_socket_buff[resource_id], response)
+
+            http_release_resources(resource_id)
+
+            if (valid_response) {
                 #if_defined HTTP_RESPONSE_CALLBACK
                 http_response_received(req_obj.seq, req_obj.host, req_obj.request, response)
                 #end_if
@@ -557,28 +580,28 @@ data_event[http_sockets] {
                 #end_if
             }
         }
-
-        http_req_objs[id].socket_state = HTTP_SOCKET_CLOSED
-
-        http_release_resources(id)
     }
 
     onerror: {
-        stack_var integer id
+        stack_var integer resource_id
         stack_var http_req_obj req_obj
 
-        id = get_last(http_sockets)
-        req_obj = http_req_objs[id]
+        resource_id = get_last(http_sockets)
+        req_obj = http_req_objs[resource_id]
 
-        amx_log(AMX_ERROR, "'HTTP socket error (', HTTP_ERR_TEXT[data.number], ')'")
+        if (data.number != HTTP_ERR_LOCAL_PORT_ALREADY_USED) {
+            http_socket_state[resource_id] = HTTP_SOCKET_STATE_CLOSED
+        }
 
-        #if_defined HTTP_ERROR_CALLBACK
-        http_error(req_obj.seq, req_obj.host, req_obj.request, data.number)
-        #end_if
+        if (http_resource_in_use(resource_id)) {
+            amx_log(AMX_ERROR, "'HTTP socket error (', HTTP_ERR_TEXT[data.number], ')'")
 
-        http_req_objs[id].socket_state = HTTP_SOCKET_CLOSED
+            http_release_resources(resource_id)
 
-        http_release_resources(id)
+            #if_defined HTTP_ERROR_CALLBACK
+            http_error(req_obj.seq, req_obj.host, req_obj.request, data.number)
+            #end_if
+        }
     }
 
     string: {}
@@ -600,28 +623,24 @@ timeline_event[HTTP_TIMEOUT_TL_12]
 timeline_event[HTTP_TIMEOUT_TL_13]
 timeline_event[HTTP_TIMEOUT_TL_14]
 timeline_event[HTTP_TIMEOUT_TL_15] {
-    stack_var integer id
+    stack_var integer resource_id
     stack_var http_req_obj req_obj
 
-    for (id = 1; id <= length_array(HTTP_TIMEOUT_TL); id++) {
-        if (timeline.id == HTTP_TIMEOUT_TL[id]) {
+    for (resource_id = 1; resource_id <= length_array(HTTP_TIMEOUT_TL); resource_id++) {
+        if (timeline.id == HTTP_TIMEOUT_TL[resource_id]) {
             break
         }
     }
+    req_obj = http_req_objs[resource_id]
 
-    req_obj = http_req_objs[id]
+    if (http_resource_in_use(resource_id)) {
+        amx_log(AMX_ERROR, 'HTTP response timeout')
 
-    amx_log(AMX_ERROR, 'HTTP response timeout')
+        http_release_resources(resource_id)
 
-    #if_defined HTTP_ERROR_CALLBACK
-    http_error(req_obj.seq, req_obj.host, req_obj.request, HTTP_ERR_RESPONSE_TIME_OUT)
-    #end_if
-
-    if (req_obj.socket_state == HTTP_SOCKET_OPEN || req_obj.socket_state == HTTP_SOCKET_OPENING) {
-        ip_client_close(http_sockets[id].port)
-        http_req_objs[id].socket_state = HTTP_SOCKET_CLOSING
-    } else {
-        http_release_resources(id)
+        #if_defined HTTP_ERROR_CALLBACK
+        http_error(req_obj.seq, req_obj.host, req_obj.request, HTTP_ERR_RESPONSE_TIME_OUT)
+        #end_if
     }
 }
 
